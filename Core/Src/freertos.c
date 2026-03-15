@@ -350,6 +350,7 @@ void ControlTask(void *argument) {
 	(void)argument;
 
 	uint8_t prev_want_run = 0u;
+	uint8_t prev_speed_step=speed_step;
 	MotorCmd_t cmd;
 
 	for (;;) {
@@ -364,8 +365,10 @@ void ControlTask(void *argument) {
 				ctrl_want_run=1u;
 			}
 		}
-		if(ctrl_want_run != prev_want_run) {
+		if ((ctrl_want_run != prev_want_run) ||
+			((ctrl_want_run == 1u) && (speed_step != prev_speed_step)))  {
 			prev_want_run=ctrl_want_run;
+			prev_speed_step = speed_step;
 
 			if(ctrl_want_run) {
 				cmd.type=MOTOR_CMD_RUN;
