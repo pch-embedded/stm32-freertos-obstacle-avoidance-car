@@ -39,7 +39,6 @@
 #define BTN_PIN           GPIO_PIN_13
 
 #define BTN_DEBOUNCE_MS   (30u)
-#define BTN_LONG_MS       (800u)
 #define US_NEAR_TH_CM   (20u)
 #define US_NEAR_ON_CM    (18u)
 #define US_NEAR_OFF_CM   (22u)
@@ -71,7 +70,8 @@ volatile uint32_t dbg_press_tick = 0;
 volatile uint32_t dbg_dur_ms     = 0;
 
 /* control debug */
-volatile uint8_t ctrl_want_run;
+volatile uint8_t ctrl_want_run = 0u;
+volatile uint8_t auto_speed_step = 0u;
 
 
 
@@ -261,14 +261,8 @@ void ButtonTask(void *argument)
       uint32_t tick_hz = osKernelGetTickFreq();
       uint32_t dur_ms = (tick_hz != 0u) ? (dt_ticks * 1000u) / tick_hz : dt_ticks;
       dbg_dur_ms = dur_ms;
+      stop_flag ^= 1u;
 
-      if (dur_ms >= BTN_LONG_MS) {
-        /* long: speed step++ */
-        speed_step = (uint8_t)((speed_step + 1u) % 3u);
-      } else {
-        /* short: stop toggle */
-        stop_flag ^= 1u;
-      }
 
     }
   }
@@ -350,7 +344,7 @@ void ControlTask(void *argument) {
 	(void)argument;
 
 	uint8_t prev_want_run = 0u;
-	uint8_t prev_speed_step=speed_step;
+	uint8_t prev_speed_step=auto_speed_step;
 	MotorCmd_t cmd;
 
 	for (;;) {
@@ -364,19 +358,29 @@ void ControlTask(void *argument) {
 			else {
 				ctrl_want_run=1u;
 			}
+
+			if(us_dist_cm > 40u) {
+				auto_speed_step =2u;
+			}
+			else {
+				auto_speed_step=1u;
+			}
+
+
+
 		}
 		if ((ctrl_want_run != prev_want_run) ||
-			((ctrl_want_run == 1u) && (speed_step != prev_speed_step)))  {
+			((ctrl_want_run == 1u) && (auto_speed_step != prev_speed_step)))  {
 			prev_want_run=ctrl_want_run;
-			prev_speed_step = speed_step;
+			prev_speed_step = auto_speed_step;
 
 			if(ctrl_want_run) {
 				cmd.type=MOTOR_CMD_RUN;
-				cmd.speed_step=speed_step;
+				cmd.speed_step=auto_speed_step;
 			}
 			else {
 				cmd.type=MOTOR_CMD_STOP;
-				cmd.speed_step=speed_step;
+				cmd.speed_step=auto_speed_step;
 			}
 			(void)osMessageQueuePut(motorCmdQHandle, &cmd,0U,0U);
 		}
