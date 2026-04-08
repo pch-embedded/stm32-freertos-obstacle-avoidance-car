@@ -39,9 +39,12 @@
 #define BTN_PIN           GPIO_PIN_13
 
 #define BTN_DEBOUNCE_MS   (30u)
-#define US_NEAR_TH_CM   (20u)
 #define US_NEAR_ON_CM    (18u)
 #define US_NEAR_OFF_CM   (22u)
+#define SCAN_SAFE_CM (25u)
+#define SERVO_CENTER 1500
+#define SERVO_LEFT   2000
+#define SERVO_RIGHT   1000
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -59,6 +62,11 @@ volatile UsEchoEdgeMsg us_last;
 volatile uint32_t us_last_seq;
 volatile uint32_t us_dist_cm=0;
 volatile uint8_t  us_is_near;
+volatile uint32_t scan_center_cm =0;
+volatile uint32_t scan_left_cm=0;
+volatile uint32_t scan_right_cm=0;
+volatile uint8_t scan_dir=0; // 0==none, 1=left,2=right
+volatile uint8_t scan_done = 0u;
 
 
 
@@ -283,8 +291,12 @@ void MotorTask(void *argument)
 
     if (cmd.type == MOTOR_CMD_STOP) {
       Motor_Stop();
-    } else {
-      Motor_Run(cmd.speed_step);
+    }
+    else if (cmd.type == MOTOR_CMD_RUN){
+    	Motor_Run(cmd.speed_step);
+    }
+    else if (cmd.type == MOTOR_CMD_BACK) {
+    	Motor_Back(cmd.speed_step);
     }
   }
 }
@@ -340,6 +352,35 @@ void UltrasonicTrigTask(void *argument)
   }
 }
 
+static void ScanPracticeOnce(void)
+{
+	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, SERVO_CENTER);
+	osDelay(500);
+	scan_center_cm=us_dist_cm; // 중앙 확인
+
+	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, SERVO_LEFT);
+	osDelay(500);
+	scan_left_cm=us_dist_cm; // 왼쪽 확인
+
+	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, SERVO_RIGHT);
+	osDelay(500);
+	scan_right_cm=us_dist_cm; //오른쪽 확인
+
+	if((scan_center_cm < SCAN_SAFE_CM) &&
+	(scan_left_cm < SCAN_SAFE_CM) &&
+	(scan_right_cm < SCAN_SAFE_CM)) {
+		scan_dir=0u; //후진
+	}
+
+	else if(scan_left_cm>scan_right_cm) {
+		scan_dir=1u;
+	}
+		else {
+			scan_dir=2u;
+		}
+
+}
+
 void ControlTask(void *argument) {
 	(void)argument;
 
@@ -354,9 +395,53 @@ void ControlTask(void *argument) {
 		else {
 			if(us_is_near) {
 				ctrl_want_run=0u;
+
+				if(scan_done==0u) {
+					ScanPracticeOnce();
+					scan_done=1u;
+
+					if(scan_dir==0u) {
+						cmd.type=MOTOR_CMD_BACK;
+						cmd.speed_step=1u;
+						(void)osMessageQueuePut(motorCmdQHandle, &cmd, 0U, 0U);
+
+						osDelay(1000);
+
+						cmd.type=MOTOR_CMD_STOP;
+						cmd.speed_step=0u;
+						(void)osMessageQueuePut(motorCmdQHandle, &cmd, 0U, 0U);
+
+						scan_done=0u;
+					}
+					else if(scan_dir==1u) {
+						cmd.type=MOTOR_CMD_STOP;
+						cmd.speed_step=0u;
+						(void)osMessageQueuePut(motorCmdQHandle, &cmd, 0U, 0U);
+						Motor_TurnLeft(1);
+						osDelay(500);
+						Motor_Stop();
+					}
+					else if(scan_dir==2u) {
+						cmd.type=MOTOR_CMD_STOP;
+						cmd.speed_step=0u;
+						(void)osMessageQueuePut(motorCmdQHandle, &cmd, 0U, 0U);
+
+						Motor_TurnRight(1);
+						osDelay(500);
+						Motor_Stop();
+					}
+
+				}
+
 			}
 			else {
-				ctrl_want_run=1u;
+				if(us_dist_cm>=SCAN_SAFE_CM) {
+					ctrl_want_run=1u;
+					scan_done=0u;
+				}
+				else {
+					ctrl_want_run=0u;
+				}
 			}
 
 			if(us_dist_cm > 40u) {

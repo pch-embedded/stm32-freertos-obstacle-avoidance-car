@@ -7,6 +7,7 @@
 typedef enum {
     MOTOR_CMD_STOP = 0,
     MOTOR_CMD_RUN  = 1,
+	MOTOR_CMD_BACK = 2,
 } MotorCmdType_t;
 
 typedef struct {

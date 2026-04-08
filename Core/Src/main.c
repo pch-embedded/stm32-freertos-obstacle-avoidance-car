@@ -102,6 +102,9 @@ int main(void)
   Motor_Init(&htim3);
   HAL_TIM_Base_Start(&htim5);   // ★ TIM5 카운터(1us 기준) 계속 돌리기
 
+  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
+  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 1500);
+
   /* safe boot 기본값(필요하면 유지) */
   stop_flag  = 1u;   /* 시작은 STOP */
   /* USER CODE END 2 */
