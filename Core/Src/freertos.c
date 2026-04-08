@@ -298,6 +298,12 @@ void MotorTask(void *argument)
     else if (cmd.type == MOTOR_CMD_BACK) {
     	Motor_Back(cmd.speed_step);
     }
+    else if (cmd.type == MOTOR_CMD_TURN_LEFT) {
+    	Motor_TurnLeft(cmd.speed_step);
+    }
+    else if (cmd.type == MOTOR_CMD_TURN_RIGHT) {
+    	Motor_TurnRight(cmd.speed_step);
+    }
   }
 }
 
@@ -407,9 +413,7 @@ void ControlTask(void *argument) {
 						cmd.type=MOTOR_CMD_BACK;
 						cmd.speed_step=1u;
 						(void)osMessageQueuePut(motorCmdQHandle, &cmd, 0U, 0U);
-
 						osDelay(1000);
-
 						cmd.type=MOTOR_CMD_STOP;
 						cmd.speed_step=0u;
 						(void)osMessageQueuePut(motorCmdQHandle, &cmd, 0U, 0U);
@@ -417,21 +421,28 @@ void ControlTask(void *argument) {
 						scan_done=0u;
 					}
 					else if(scan_dir==1u) {
+						cmd.type= MOTOR_CMD_TURN_LEFT;
+						cmd.speed_step=1u;
+						(void)osMessageQueuePut(motorCmdQHandle, &cmd, 0U, 0U);
+
+						osDelay(500);
+
 						cmd.type=MOTOR_CMD_STOP;
 						cmd.speed_step=0u;
 						(void)osMessageQueuePut(motorCmdQHandle, &cmd, 0U, 0U);
-						Motor_TurnLeft(1);
-						osDelay(500);
-						Motor_Stop();
 					}
 					else if(scan_dir==2u) {
+						cmd.type=MOTOR_CMD_TURN_RIGHT;
+						cmd.speed_step=1u;
+						(void)osMessageQueuePut(motorCmdQHandle, &cmd, 0U, 0U);
+
+						osDelay(500);
+
 						cmd.type=MOTOR_CMD_STOP;
 						cmd.speed_step=0u;
 						(void)osMessageQueuePut(motorCmdQHandle, &cmd, 0U, 0U);
 
-						Motor_TurnRight(1);
-						osDelay(500);
-						Motor_Stop();
+
 					}
 
 				}
