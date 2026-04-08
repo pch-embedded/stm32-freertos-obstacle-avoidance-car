@@ -366,6 +366,9 @@ static void ScanPracticeOnce(void)
 	osDelay(500);
 	scan_right_cm=us_dist_cm; //오른쪽 확인
 
+	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1,SERVO_CENTER);
+	osDelay(300);
+
 	if((scan_center_cm < SCAN_SAFE_CM) &&
 	(scan_left_cm < SCAN_SAFE_CM) &&
 	(scan_right_cm < SCAN_SAFE_CM)) {
