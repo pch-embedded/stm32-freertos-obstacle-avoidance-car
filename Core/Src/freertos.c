@@ -45,6 +45,7 @@
 #define SERVO_CENTER 1500
 #define SERVO_LEFT   2000
 #define SERVO_RIGHT   1000
+#define SCAN_DIR_NONE 255u
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -65,7 +66,7 @@ volatile uint8_t  us_is_near;
 volatile uint32_t scan_center_cm =0;
 volatile uint32_t scan_left_cm=0;
 volatile uint32_t scan_right_cm=0;
-volatile uint8_t scan_dir=0; // 0==none, 1=left,2=right
+volatile uint8_t scan_dir=SCAN_DIR_NONE; // 0==none, 1=left,2=right
 volatile uint8_t scan_done = 0u;
 
 
@@ -406,6 +407,10 @@ void ControlTask(void *argument) {
 				ctrl_want_run=0u;
 
 				if(scan_done==0u) {
+					cmd.type=MOTOR_CMD_STOP;
+					cmd.speed_step=0u;
+					(void)osMessageQueuePut(motorCmdQHandle, &cmd, 0U, 0U);
+					osDelay(100);
 					ScanPracticeOnce();
 					scan_done=1u;
 
@@ -414,10 +419,12 @@ void ControlTask(void *argument) {
 						cmd.speed_step=1u;
 						(void)osMessageQueuePut(motorCmdQHandle, &cmd, 0U, 0U);
 						osDelay(1000);
+
 						cmd.type=MOTOR_CMD_STOP;
 						cmd.speed_step=0u;
 						(void)osMessageQueuePut(motorCmdQHandle, &cmd, 0U, 0U);
 
+						scan_dir=SCAN_DIR_NONE;
 						scan_done=0u;
 					}
 					else if(scan_dir==1u) {
@@ -430,6 +437,9 @@ void ControlTask(void *argument) {
 						cmd.type=MOTOR_CMD_STOP;
 						cmd.speed_step=0u;
 						(void)osMessageQueuePut(motorCmdQHandle, &cmd, 0U, 0U);
+
+						scan_dir=SCAN_DIR_NONE;
+						scan_done = 0u;
 					}
 					else if(scan_dir==2u) {
 						cmd.type=MOTOR_CMD_TURN_RIGHT;
@@ -441,6 +451,9 @@ void ControlTask(void *argument) {
 						cmd.type=MOTOR_CMD_STOP;
 						cmd.speed_step=0u;
 						(void)osMessageQueuePut(motorCmdQHandle, &cmd, 0U, 0U);
+
+						scan_dir=SCAN_DIR_NONE;
+						scan_done = 0u;
 
 
 					}
