@@ -100,7 +100,7 @@ osThreadId_t defaultTaskHandle;
 const osThreadAttr_t defaultTask_attributes = {
   .name = "defaultTask",
   .stack_size = 128 * 4,
-  .priority = (osPriority_t) osPriorityNormal,
+  .priority = (osPriority_t) osPriorityLow,
 };
 
 /* USER CODE BEGIN RTOS_THREADS_DECL */
@@ -108,7 +108,7 @@ osThreadId_t ButtonTaskHandle;
 const osThreadAttr_t ButtonTask_attributes = {
   .name = "ButtonTask",
   .stack_size = 256 * 4,
-  .priority = (osPriority_t) osPriorityAboveNormal1,
+  .priority = (osPriority_t) osPriorityNormal,
 };
 
 osThreadId_t MotorTaskHandle;
@@ -122,7 +122,7 @@ osThreadId_t UltrasonicEdgeTaskHandle;
 const osThreadAttr_t UltrasonicEdgeTask_attributes = {
   .name = "UltrasonicEdgeTask",
   .stack_size = 256 * 4,
-  .priority = (osPriority_t) osPriorityNormal,
+  .priority = (osPriority_t) osPriorityHigh,
 };
 
 osThreadId_t UltrasonicTrigTaskHandle;
@@ -136,7 +136,7 @@ osThreadId_t ControlTaskHandle;
 const osThreadAttr_t ControlTask_attributes = {
 		.name = "ControlTask",
 		.stack_size = 256 * 4,
-		.priority = (osPriority_t) osPriorityNormal,
+		.priority = (osPriority_t) osPriorityAboveNormal,
 		};
 /* USER CODE END RTOS_THREADS_DECL */
 
