@@ -46,6 +46,7 @@
 #define SERVO_LEFT   2000
 #define SERVO_RIGHT   1000
 #define SCAN_DIR_NONE 255u
+#define US_SPIKE_CM 100u
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -325,7 +326,12 @@ void UltrasonicEdgeTask(void *argument)
       us_fall_cnt++;
       us_pulse_us = (uint32_t)(msg.t_us - us_rise_us);
       if (us_pulse_us >= 150u && us_pulse_us <= 25000u) {
-    	  us_dist_cm = us_pulse_us / 58u;
+    	  uint32_t temp_dist_cm = us_pulse_us / 58u;
+
+    	  if ((us_dist_cm == 0u) || ((temp_dist_cm > us_dist_cm) && ((temp_dist_cm - us_dist_cm) < US_SPIKE_CM)) || ((temp_dist_cm <= us_dist_cm) && ((us_dist_cm - temp_dist_cm) < US_SPIKE_CM)))
+    	  {
+    		  us_dist_cm = temp_dist_cm;
+    	  }
     	  if(us_dist_cm<=US_NEAR_ON_CM) {
     		  us_is_near=1u;
     	  }
