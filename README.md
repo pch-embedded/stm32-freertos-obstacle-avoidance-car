@@ -1,10 +1,15 @@
 # STM32 FreeRTOS Obstacle Avoidance Car
 
-STM32H753ZI와 FreeRTOS를 기반으로 구현한 초음파 센서 장애물 감지 및 회피 주행 프로젝트입니다.  
-전방 장애물을 감지하면 차량을 정지시키고, 서보모터를 이용해 좌/우 방향을 스캔한 뒤 더 넓은 방향으로 회피 주행하도록 구현했습니다.
+STM32H753ZI와 FreeRTOS를 기반으로 구현한 초음파 센서 장애물 감지 및 회피 주행 프로젝트입니다.
+
+전방 장애물을 감지하면 차량을 정지시키고, 서보모터를 이용해 좌/우 방향을 스캔한 뒤 더 넓은 방향으로 회피 주행하도록 구현했습니다.  
+단순한 센서-모터 연결이 아니라, 센서 입력, 제어 판단, 모터 구동을 FreeRTOS Task로 분리하고 Queue, Mutex, EventFlags, 상태머신을 적용하여 구조적인 임베디드 제어 흐름을 구현하는 것을 목표로 했습니다.
+
+---
 
 ## 1. 프로젝트 개요
-이 프로젝트는 단순한 모터 구동이 아니라, 센서 입력, 제어 판단, 모터 구동을 분리한 임베디드 제어 구조를 직접 구현하는 것을 목표로 했습니다.
+
+이 프로젝트는 초음파 센서 기반 장애물 감지와 모터 제어를 FreeRTOS 기반으로 분리 설계한 임베디드 주행 시스템입니다.
 
 주요 기능은 다음과 같습니다.
 
@@ -13,10 +18,16 @@ STM32H753ZI와 FreeRTOS를 기반으로 구현한 초음파 센서 장애물 감
 - 서보모터를 이용한 중앙/좌/우 스캔
 - 좌/우 거리 비교 후 회피 방향 결정
 - 좌회전, 우회전, 후진 및 재탐색 동작
-- FreeRTOS Task / Queue 기반 구조 적용
+- FreeRTOS Task / Queue 기반 모터 명령 처리
+- Mutex 기반 초음파 거리값 Snapshot 보호
+- EventFlags 기반 Task 이벤트 동기화
+- ControlTask 상태머신 기반 non-blocking 제어 구조
 - 초음파 거리값 스파이크 필터링 적용
 
+---
+
 ## 2. 개발 환경
+
 - MCU: STM32H753ZI
 - IDE: STM32CubeIDE
 - Language: C
@@ -25,80 +36,80 @@ STM32H753ZI와 FreeRTOS를 기반으로 구현한 초음파 센서 장애물 감
 - Servo Motor: SG90
 - DC Motor Driver: L298N
 
+---
+
 ## 3. 시스템 구성
-- `UltrasonicTrigTask`  
-  초음파 센서에 Trigger 펄스를 주기적으로 발생
 
-- `UltrasonicEdgeTask`  
-  Echo rising/falling edge를 처리하고 거리값 계산
+### UltrasonicTrigTask
 
-- `ControlTask`  
-  전방 거리 판단, 정지, 좌우 스캔, 회전/후진 명령 결정
+초음파 센서에 Trigger 펄스를 주기적으로 발생시킵니다.
 
-- `MotorTask`  
-  Queue를 통해 전달받은 모터 명령 실행
+### UltrasonicEdgeTask
 
-- `ButtonTask`  
-  버튼 입력 처리 및 정지/재시작 제어
+Echo rising/falling edge를 Queue로 수신하고, Echo pulse 시간을 기반으로 거리값을 계산합니다.  
+계산된 거리값은 Mutex로 보호되는 Snapshot 구조체에 저장됩니다.
+
+### ControlTask
+
+초음파 Snapshot을 읽어 전방 장애물 여부를 판단하고, 주행/정지/스캔/회피 동작을 결정합니다.  
+기존의 blocking delay 기반 흐름을 상태머신으로 개선하여 ControlTask가 장시간 멈추지 않도록 구성했습니다.
+
+### MotorTask
+
+`motorCmdQ`를 통해 전달받은 모터 명령만 수행합니다.  
+전진, 정지, 후진, 좌회전, 우회전 동작은 MotorTask가 전담합니다.
+
+### ButtonTask
+
+버튼 입력을 디바운싱한 뒤 EventFlags를 통해 ControlTask에 RUN/STOP 토글 이벤트를 전달합니다.
+
+---
 
 ## 4. 동작 로직
+
 1. 평소에는 중앙 방향 거리값을 기준으로 직진
 2. 전방 장애물이 일정 거리 이하로 들어오면 정지
-3. 서보모터를 이용해 중앙/좌/우 거리 스캔
+3. 서보모터를 중앙 → 좌측 → 우측 방향으로 이동시키며 거리 측정
 4. 좌/우 중 더 넓은 방향으로 회전
-5. 전방과 좌우가 모두 위험하면 후진
+5. 중앙/좌/우 모두 위험하면 후진
 6. 회전 또는 후진 후 다시 전방을 확인하고 주행 재개
+7. 버튼 입력 시 RUN/STOP 상태 전환
+
+---
 
 ## 5. 주요 구현 내용
-- `US_NEAR_ON_CM`, `US_NEAR_OFF_CM`를 이용한 히스테리시스 적용
-- `scan_dir`, `scan_done`을 이용한 스캔 결과 및 재탐색 제어
-- `MOTOR_CMD_RUN`, `STOP`, `BACK`, `TURN_LEFT`, `TURN_RIGHT` 명령 분리
-- 센서 처리 태스크 우선순위를 높여 실시간성 개선
-- 초음파 거리값이 이전 값 대비 과도하게 튈 경우 무시하는 스파이크 필터 적용
 
-## 6. 문제 해결 과정
-프로젝트 구현 중 다음과 같은 문제를 직접 수정했습니다.
+### FreeRTOS Task 분리
 
-- 스캔 중 차량이 계속 직진하던 문제  
-  → 스캔 전에 먼저 STOP 명령을 수행하도록 수정
+센서 입력, 제어 판단, 모터 구동을 각각 독립된 Task로 분리했습니다.
 
-- 좌우 회전 방향이 실제 주행에서 반대로 동작하던 문제  
-  → 바퀴 채널과 방향핀 매핑을 실제 동작 기준으로 다시 보정
+- UltrasonicTrigTask: 초음파 Trigger 발생
+- UltrasonicEdgeTask: Echo edge 처리 및 거리 계산
+- ControlTask: 주행 상태 판단 및 회피 로직 수행
+- MotorTask: 모터 명령 실행
+- ButtonTask: 버튼 입력 처리
 
-- 이전 스캔 결과가 남아있던 문제
-  → `SCAN_DIR_NONE`을 도입해 방향 결과를 초기화
+### Queue 기반 모터 명령 처리
 
-- 한 번 스캔 후 재탐색이 제한되던 문제  
-  → 회전/후진 후 `scan_done`을 초기화해 다시 스캔 가능하도록 수정
+ControlTask가 모터를 직접 제어하지 않고, `MotorCmd_t` 명령을 `motorCmdQ`에 전달하도록 구성했습니다.  
+MotorTask는 Queue에서 명령을 수신한 뒤 실제 GPIO/PWM 제어를 수행합니다.
 
-- 초음파 센서 값이 순간적으로 튀는 문제  
-  → 스파이크 필터를 추가해 비정상 거리값 무시
+지원하는 모터 명령은 다음과 같습니다.
 
-## 7. 폴더 구조
-- `Src/` : 소스 코드
-- `Inc/` : 헤더 파일
+- `MOTOR_CMD_RUN`
+- `MOTOR_CMD_STOP`
+- `MOTOR_CMD_BACK`
+- `MOTOR_CMD_TURN_LEFT`
+- `MOTOR_CMD_TURN_RIGHT`
 
-주요 파일
-- `freertos.c` : Task, Queue, 전체 제어 로직
-- `motor.c` : 전진, 후진, 좌회전, 우회전 모터 제어
-- `main.c` : 초기화 및 하드웨어 시작
-- `app_state.h / app_state.c` : 공용 상태 변수 정의
+### Mutex 기반 초음파 Snapshot 보호
 
-## 8. 시연 영상
-프로젝트 시연 영상에는 다음 동작이 포함되어 있습니다.
+초음파 거리값을 여러 Task가 직접 공유하지 않도록 `UsSnapshot_t` 구조체로 묶었습니다.
 
-- 초기 주행
-- 장애물 접근
-- 자동 정지
-- 서보 좌/우 스캔
-- 회피 방향 판단
-- 회전 및 재주행
-
-## 9. 향후 개선 방향
-- 전역 변수 기반 상태 공유를 Queue 중심 구조로 개선
-- `ControlTask` 내 blocking delay를 줄인 non-blocking 상태 머신 구조 적용
-- 회전 제어 정밀도 향상
-- 추가 센서 연동을 통한 주행 안정성 강화
-
-## 10. 한 줄 요약
-STM32H753ZI와 FreeRTOS를 기반으로, 초음파 센서 입력과 모터 제어를 분리 설계하여 장애물 감지, 정지, 좌우 스캔, 회피 주행까지 구현한 임베디드 프로젝트입니다.
+```c
+typedef struct {
+    uint32_t dist_cm;
+    uint8_t  is_near;
+    uint32_t pulse_us;
+    uint32_t seq;
+} UsSnapshot_t;
