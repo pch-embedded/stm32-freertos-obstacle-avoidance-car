@@ -30,6 +30,30 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+
+typedef enum {
+    APP_EVT_BUTTON_TOGGLE=0
+} AppEvent_t;
+
+typedef struct {
+	uint32_t dist_cm;
+	uint8_t is_near;
+	uint32_t pulse_us;
+	uint32_t seq;
+} UsSnapshot_t;
+
+typedef enum {
+    CTRL_STATE_STOPPED = 0,
+    CTRL_STATE_RUN,
+
+    CTRL_STATE_SCAN_CENTER_WAIT,
+    CTRL_STATE_SCAN_LEFT_WAIT,
+    CTRL_STATE_SCAN_RIGHT_WAIT,
+
+    CTRL_STATE_BACK_WAIT,
+    CTRL_STATE_TURN_LEFT_WAIT,
+    CTRL_STATE_TURN_RIGHT_WAIT
+} CtrlState_t;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -47,6 +71,9 @@
 #define SERVO_RIGHT   1000
 #define SCAN_DIR_NONE 255u
 #define US_SPIKE_CM 100u
+#define APP_FLAG_US_UPDATE (1U << 0)
+#define APP_FLAG_BUTTON_TOGGLE (1U << 1)
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -62,12 +89,14 @@ volatile uint32_t us_rise_us;
 volatile uint32_t us_pulse_us;
 volatile UsEchoEdgeMsg us_last;
 volatile uint32_t us_last_seq;
-volatile uint32_t us_dist_cm=0;
-volatile uint8_t  us_is_near;
+
+
+static UsSnapshot_t g_us_snapshot = {0};
+
 volatile uint32_t scan_center_cm =0;
 volatile uint32_t scan_left_cm=0;
 volatile uint32_t scan_right_cm=0;
-volatile uint8_t scan_dir=SCAN_DIR_NONE; // 0==none, 1=left,2=right
+volatile uint8_t scan_dir=SCAN_DIR_NONE; //  1=left,2=right
 volatile uint8_t scan_done = 0u;
 
 
@@ -94,7 +123,20 @@ const osMessageQueueAttr_t motorCmdQ_attributes = { .name = "motorCmdQ" };
 
 osMessageQueueId_t usEchoEdgeQHandle;
 const osMessageQueueAttr_t usEchoEdgeQ_attributes = { .name = "usEchoEdgeQ" };
-/* USER CODE END Variables */
+
+osMessageQueueId_t appEventQHandle;
+const osMessageQueueAttr_t appEventQ_attributes = { .name = "appEventQ" };
+
+
+
+/*------Mutex---*/
+osMutexId_t usMutexHandle;
+const osMutexAttr_t usMutex_attributes = {.name = "usMutex"};
+
+/* ---- Event Flags ---- */
+osEventFlagsId_t appFlagsHandle;
+const osEventFlagsAttr_t appFlags_attributes = {.name = "appFlags"};
+		/* USER CODE END Variables */
 
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
@@ -168,9 +210,13 @@ void MX_FREERTOS_Init(void) {
   btnEdgeQHandle    = osMessageQueueNew(16, sizeof(uint32_t),   &btnEdgeQ_attributes);
   motorCmdQHandle   = osMessageQueueNew(8,  sizeof(MotorCmd_t), &motorCmdQ_attributes);
   usEchoEdgeQHandle = osMessageQueueNew(16, sizeof(UsEchoEdgeMsg), &usEchoEdgeQ_attributes);
+  appEventQHandle   = osMessageQueueNew(8, sizeof(AppEvent_t), &appEventQ_attributes);
+
+  appFlagsHandle    = osEventFlagsNew(&appFlags_attributes);
   /* USER CODE END Init */
 
   /* USER CODE BEGIN RTOS_MUTEX */
+  usMutexHandle = osMutexNew(&usMutex_attributes);
   /* USER CODE END RTOS_MUTEX */
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
@@ -194,6 +240,7 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
+
   /* USER CODE END RTOS_EVENTS */
 }
 
@@ -225,6 +272,44 @@ static void delay_us(uint32_t us)
   while ((uint32_t)(__HAL_TIM_GET_COUNTER(&htim5) - start) < us) {
     /* busy wait */
   }
+}
+
+static void UsSnapshot_Update(uint32_t dist_cm, uint8_t is_near, uint32_t pulse_us)
+{
+	osMutexAcquire(usMutexHandle, osWaitForever);
+
+	g_us_snapshot.dist_cm  = dist_cm;
+	g_us_snapshot.is_near  = is_near;
+	g_us_snapshot.pulse_us = pulse_us;
+	g_us_snapshot.seq++;
+
+	osMutexRelease(usMutexHandle);
+
+	if (appFlagsHandle != NULL) {
+	    (void)osEventFlagsSet(appFlagsHandle, APP_FLAG_US_UPDATE);
+	}
+}
+
+static UsSnapshot_t UsSnapshot_Get(void)
+{
+    UsSnapshot_t copy;
+
+    osMutexAcquire(usMutexHandle, osWaitForever);
+
+    copy = g_us_snapshot;
+
+    osMutexRelease(usMutexHandle);
+
+    return copy;
+}
+
+static void Motor_Post(MotorCmdType_t type, uint8_t speed_step){
+    MotorCmd_t cmd;
+
+    cmd.type = type;
+    cmd.speed_step = speed_step;
+
+    (void)osMessageQueuePut(motorCmdQHandle, &cmd, 0U, 0U);
 }
 
 /* ButtonTask: btnEdgeQ( packed tick/level ) -> motorCmdQ */
@@ -271,8 +356,8 @@ void ButtonTask(void *argument)
       uint32_t tick_hz = osKernelGetTickFreq();
       uint32_t dur_ms = (tick_hz != 0u) ? (dt_ticks * 1000u) / tick_hz : dt_ticks;
       dbg_dur_ms = dur_ms;
-      stop_flag ^= 1u;
 
+      (void)osEventFlagsSet(appFlagsHandle, APP_FLAG_BUTTON_TOGGLE);
 
     }
   }
@@ -315,6 +400,10 @@ void UltrasonicEdgeTask(void *argument)
   (void)argument;
   UsEchoEdgeMsg msg;
 
+  uint32_t dist_cm =0u;
+  uint8_t is_near = 0u;
+
+
   for (;;)
   {
     osMessageQueueGet(usEchoEdgeQHandle, &msg, NULL, osWaitForever);
@@ -328,16 +417,17 @@ void UltrasonicEdgeTask(void *argument)
       if (us_pulse_us >= 150u && us_pulse_us <= 25000u) {
     	  uint32_t temp_dist_cm = us_pulse_us / 58u;
 
-    	  if ((us_dist_cm == 0u) || ((temp_dist_cm > us_dist_cm) && ((temp_dist_cm - us_dist_cm) < US_SPIKE_CM)) || ((temp_dist_cm <= us_dist_cm) && ((us_dist_cm - temp_dist_cm) < US_SPIKE_CM)))
+    	  if ((dist_cm == 0u) || ((temp_dist_cm > dist_cm) && ((temp_dist_cm - dist_cm) < US_SPIKE_CM)) || ((temp_dist_cm <= dist_cm) && ((dist_cm - temp_dist_cm) < US_SPIKE_CM)))
     	  {
-    		  us_dist_cm = temp_dist_cm;
+    		  dist_cm = temp_dist_cm;
     	  }
-    	  if(us_dist_cm<=US_NEAR_ON_CM) {
-    		  us_is_near=1u;
+    	  if(dist_cm<=US_NEAR_ON_CM) {
+    		  is_near=1u;
     	  }
-    	  else if(us_dist_cm>=US_NEAR_OFF_CM) {
-    		  us_is_near=0u;
+    	  else if(dist_cm>=US_NEAR_OFF_CM) {
+    		  is_near=0u;
     	  }
+    	  UsSnapshot_Update(dist_cm, is_near, us_pulse_us);
         }
     }
 
@@ -365,145 +455,198 @@ void UltrasonicTrigTask(void *argument)
   }
 }
 
-static void ScanPracticeOnce(void)
+
+void ControlTask(void *argument)
 {
-	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, SERVO_CENTER);
-	osDelay(500);
-	scan_center_cm=us_dist_cm; // 중앙 확인
+    (void)argument;
 
-	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, SERVO_LEFT);
-	osDelay(500);
-	scan_left_cm=us_dist_cm; // 왼쪽 확인
+    uint8_t run_enabled = 0u; // 0=STOP, 1=RUN
+    uint8_t prev_want_run = 0u;
+    uint8_t prev_speed_step = auto_speed_step;
 
-	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, SERVO_RIGHT);
-	osDelay(500);
-	scan_right_cm=us_dist_cm; //오른쪽 확인
+    CtrlState_t state = CTRL_STATE_STOPPED;
+    uint32_t deadline_tick = 0u;
 
-	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1,SERVO_CENTER);
-	osDelay(300);
+    for (;;)
+    {
+        uint32_t now = osKernelGetTickCount();
+        uint32_t wait_ticks = osWaitForever;
 
-	if((scan_center_cm < SCAN_SAFE_CM) &&
-	(scan_left_cm < SCAN_SAFE_CM) &&
-	(scan_right_cm < SCAN_SAFE_CM)) {
-		scan_dir=0u; //후진
-	}
+        if (state == CTRL_STATE_SCAN_CENTER_WAIT ||
+            state == CTRL_STATE_SCAN_LEFT_WAIT ||
+            state == CTRL_STATE_SCAN_RIGHT_WAIT ||
+            state == CTRL_STATE_BACK_WAIT ||
+            state == CTRL_STATE_TURN_LEFT_WAIT ||
+            state == CTRL_STATE_TURN_RIGHT_WAIT)
+        {
+            if ((int32_t)(now - deadline_tick) >= 0) {
+                wait_ticks = 0u;
+            } else {
+                wait_ticks = deadline_tick - now;
+            }
+        }
 
-	else if(scan_left_cm>scan_right_cm) {
-		scan_dir=1u;
-	}
-		else {
-			scan_dir=2u;
-		}
+        uint32_t flags = osEventFlagsWait(
+            appFlagsHandle,
+            APP_FLAG_BUTTON_TOGGLE | APP_FLAG_US_UPDATE,
+            osFlagsWaitAny,
+            wait_ticks
+        );
 
-}
+        if ((flags & osFlagsError) == 0u) {
+            if ((flags & APP_FLAG_BUTTON_TOGGLE) != 0u) {
+                run_enabled ^= 1u;
 
-void ControlTask(void *argument) {
-	(void)argument;
+                if (!run_enabled) {
+                    Motor_Post(MOTOR_CMD_STOP, 0u);
+                    ctrl_want_run = 0u;
+                    prev_want_run = 0u;
+                    prev_speed_step = 0u;
+                    state = CTRL_STATE_STOPPED;
+                }
+            }
+        }
 
-	uint8_t prev_want_run = 0u;
-	uint8_t prev_speed_step=auto_speed_step;
-	MotorCmd_t cmd;
+        UsSnapshot_t us = UsSnapshot_Get();
+        now = osKernelGetTickCount();
 
-	for (;;) {
-		if(stop_flag) {
-			ctrl_want_run=0u;
-		}
-		else {
-			if(us_is_near) {
-				ctrl_want_run=0u;
+        switch (state)
+        {
+        case CTRL_STATE_STOPPED:
+            ctrl_want_run = 0u;
 
-				if(scan_done==0u) {
-					cmd.type=MOTOR_CMD_STOP;
-					cmd.speed_step=0u;
-					(void)osMessageQueuePut(motorCmdQHandle, &cmd, 0U, 0U);
-					osDelay(100);
-					ScanPracticeOnce();
-					scan_done=1u;
+            if (run_enabled) {
+                state = CTRL_STATE_RUN;
+            }
+            break;
 
-					if(scan_dir==0u) {
-						cmd.type=MOTOR_CMD_BACK;
-						cmd.speed_step=1u;
-						(void)osMessageQueuePut(motorCmdQHandle, &cmd, 0U, 0U);
-						osDelay(1000);
+        case CTRL_STATE_RUN:
+        {
+            if (!run_enabled) {
+                Motor_Post(MOTOR_CMD_STOP, 0u);
+                ctrl_want_run = 0u;
+                state = CTRL_STATE_STOPPED;
+                break;
+            }
 
-						cmd.type=MOTOR_CMD_STOP;
-						cmd.speed_step=0u;
-						(void)osMessageQueuePut(motorCmdQHandle, &cmd, 0U, 0U);
+            if (us.is_near) {
+                Motor_Post(MOTOR_CMD_STOP, 0u);
+                ctrl_want_run = 0u;
+                prev_want_run = 0u;
+                prev_speed_step = 0u;
 
-						scan_dir=SCAN_DIR_NONE;
-						scan_done=0u;
-					}
-					else if(scan_dir==1u) {
-						cmd.type= MOTOR_CMD_TURN_LEFT;
-						cmd.speed_step=1u;
-						(void)osMessageQueuePut(motorCmdQHandle, &cmd, 0U, 0U);
+                __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, SERVO_CENTER);
+                deadline_tick = now + 500u;
+                state = CTRL_STATE_SCAN_CENTER_WAIT;
+                break;
+            }
 
-						osDelay(500);
+            if (us.dist_cm >= SCAN_SAFE_CM) {
+                ctrl_want_run = 1u;
 
-						cmd.type=MOTOR_CMD_STOP;
-						cmd.speed_step=0u;
-						(void)osMessageQueuePut(motorCmdQHandle, &cmd, 0U, 0U);
+                if (us.dist_cm > 40u) {
+                    auto_speed_step = 2u;
+                } else {
+                    auto_speed_step = 1u;
+                }
+            } else {
+                ctrl_want_run = 0u;
+                auto_speed_step = 0u;
+            }
 
-						scan_dir=SCAN_DIR_NONE;
-						scan_done = 0u;
-					}
-					else if(scan_dir==2u) {
-						cmd.type=MOTOR_CMD_TURN_RIGHT;
-						cmd.speed_step=1u;
-						(void)osMessageQueuePut(motorCmdQHandle, &cmd, 0U, 0U);
+            if ((ctrl_want_run != prev_want_run) ||
+                ((ctrl_want_run == 1u) && (auto_speed_step != prev_speed_step)))
+            {
+                prev_want_run = ctrl_want_run;
+                prev_speed_step = auto_speed_step;
 
-						osDelay(500);
+                if (ctrl_want_run) {
+                    Motor_Post(MOTOR_CMD_RUN, auto_speed_step);
+                } else {
+                    Motor_Post(MOTOR_CMD_STOP, 0u);
+                }
+            }
+            break;
+        }
 
-						cmd.type=MOTOR_CMD_STOP;
-						cmd.speed_step=0u;
-						(void)osMessageQueuePut(motorCmdQHandle, &cmd, 0U, 0U);
+        case CTRL_STATE_SCAN_CENTER_WAIT:
+            if ((int32_t)(now - deadline_tick) >= 0) {
+                scan_center_cm = us.dist_cm;
 
-						scan_dir=SCAN_DIR_NONE;
-						scan_done = 0u;
+                __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, SERVO_LEFT);
+                deadline_tick = now + 500u;
+                state = CTRL_STATE_SCAN_LEFT_WAIT;
+            }
+            break;
 
+        case CTRL_STATE_SCAN_LEFT_WAIT:
+            if ((int32_t)(now - deadline_tick) >= 0) {
+                scan_left_cm = us.dist_cm;
 
-					}
+                __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, SERVO_RIGHT);
+                deadline_tick = now + 500u;
+                state = CTRL_STATE_SCAN_RIGHT_WAIT;
+            }
+            break;
 
-				}
+        case CTRL_STATE_SCAN_RIGHT_WAIT:
+            if ((int32_t)(now - deadline_tick) >= 0) {
+                scan_right_cm = us.dist_cm;
 
-			}
-			else {
-				if(us_dist_cm>=SCAN_SAFE_CM) {
-					ctrl_want_run=1u;
-					scan_done=0u;
-				}
-				else {
-					ctrl_want_run=0u;
-				}
-			}
+                __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, SERVO_CENTER);
 
-			if(us_dist_cm > 40u) {
-				auto_speed_step =2u;
-			}
-			else {
-				auto_speed_step=1u;
-			}
+                if ((scan_center_cm < SCAN_SAFE_CM) &&
+                    (scan_left_cm < SCAN_SAFE_CM) &&
+                    (scan_right_cm < SCAN_SAFE_CM))
+                {
+                    scan_dir = 0u;
+                    Motor_Post(MOTOR_CMD_BACK, 1u);
+                    deadline_tick = now + 1000u;
+                    state = CTRL_STATE_BACK_WAIT;
+                }
+                else if (scan_left_cm > scan_right_cm) {
+                    scan_dir = 1u;
+                    Motor_Post(MOTOR_CMD_TURN_LEFT, 1u);
+                    deadline_tick = now + 500u;
+                    state = CTRL_STATE_TURN_LEFT_WAIT;
+                }
+                else {
+                    scan_dir = 2u;
+                    Motor_Post(MOTOR_CMD_TURN_RIGHT, 1u);
+                    deadline_tick = now + 500u;
+                    state = CTRL_STATE_TURN_RIGHT_WAIT;
+                }
+            }
+            break;
 
+        case CTRL_STATE_BACK_WAIT:
+        case CTRL_STATE_TURN_LEFT_WAIT:
+        case CTRL_STATE_TURN_RIGHT_WAIT:
+            if ((int32_t)(now - deadline_tick) >= 0) {
+                Motor_Post(MOTOR_CMD_STOP, 0u);
 
+                scan_dir = SCAN_DIR_NONE;
+                scan_done = 0u;
 
-		}
-		if ((ctrl_want_run != prev_want_run) ||
-			((ctrl_want_run == 1u) && (auto_speed_step != prev_speed_step)))  {
-			prev_want_run=ctrl_want_run;
-			prev_speed_step = auto_speed_step;
+                ctrl_want_run = 0u;
+                prev_want_run = 0u;
+                prev_speed_step = 0u;
 
-			if(ctrl_want_run) {
-				cmd.type=MOTOR_CMD_RUN;
-				cmd.speed_step=auto_speed_step;
-			}
-			else {
-				cmd.type=MOTOR_CMD_STOP;
-				cmd.speed_step=auto_speed_step;
-			}
-			(void)osMessageQueuePut(motorCmdQHandle, &cmd,0U,0U);
-		}
-		osDelay(20);
-	}
+                if (run_enabled) {
+                    state = CTRL_STATE_RUN;
+                } else {
+                    state = CTRL_STATE_STOPPED;
+                }
+            }
+            break;
+
+        default:
+            Motor_Post(MOTOR_CMD_STOP, 0u);
+            ctrl_want_run = 0u;
+            state = CTRL_STATE_STOPPED;
+            break;
+        }
+    }
 }
 
 /* USER CODE END Application */

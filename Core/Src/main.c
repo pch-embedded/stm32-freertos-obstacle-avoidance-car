@@ -106,7 +106,6 @@ int main(void)
   __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 1500);
 
   /* safe boot 기본값(필요하면 유지) */
-  stop_flag  = 1u;   /* 시작은 STOP */
   /* USER CODE END 2 */
 
   /* Init scheduler */

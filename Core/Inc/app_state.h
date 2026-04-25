@@ -17,6 +17,4 @@ typedef struct {
     uint8_t speed_step;   // 0..2
 } MotorCmd_t;
 
-extern volatile uint8_t stop_flag;   // 1=STOP, 0=RUN
-
 #endif /* APP_STATE_H */
