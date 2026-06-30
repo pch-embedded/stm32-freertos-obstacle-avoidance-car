@@ -1,5 +1,15 @@
 # STM32 FreeRTOS Obstacle Avoidance Car
 
+## Demo
+
+동작 영상:
+
+https://github.com/user-attachments/assets/f8d7e29a-13f7-4ab3-a7fa-2e8d7812b3c4
+
+
+
+
+
 STM32H753ZI와 FreeRTOS를 기반으로 구현한 초음파 센서 장애물 감지 및 회피 주행 프로젝트입니다.
 
 전방 장애물을 감지하면 차량을 정지시키고, 서보모터를 이용해 좌/우 방향을 스캔한 뒤 더 넓은 방향으로 회피 주행하도록 구현했습니다.  
